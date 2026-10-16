@@ -123,6 +123,14 @@ class MonitorLogic(unittest.TestCase):
         rep, t = run(mon, t, 12.0, obs(SHUT))
         self.assertIn("PERCLOS_HIGH", rep["alerts"])
 
+    def test_perclos_alert_clears_when_face_is_lost(self):
+        mon, t = calibrated_monitor()
+        rep, t = run(mon, t, 20.0, obs(SHUT))
+        self.assertIn("PERCLOS_HIGH", rep["alerts"])
+        rep, t = run(mon, t, 20.0, None)  # camera sees no face; old samples must age out
+        self.assertNotIn("PERCLOS_HIGH", rep["alerts"])
+        self.assertLess(rep["perclos_coverage"], 0.5)
+
 
 class ProtocolScoring(unittest.TestCase):
     def synthetic_log(self, reaction=0.3, false_closure_at=None):

@@ -152,6 +152,13 @@ class Monitor:
             self._clear(MICROSLEEP, t)
             self.mouth_open_since = None
 
+        # Age out old samples every frame, not only when eyes are seen: otherwise
+        # a lost face freezes the window and a stale PERCLOS alert never clears.
+        while self.perclos_samples and self.perclos_samples[0][0] < t - c.perclos_window_s:
+            self.perclos_samples.popleft()
+        while self.blinks and self.blinks[0] < t - 60.0:
+            self.blinks.popleft()
+
         state = OK if trusted else UNCERTAIN
         return self._report(t, state, obs, dyaw, dpitch)
 
@@ -168,10 +175,6 @@ class Monitor:
             self._raise(MICROSLEEP, self.closed_since, t)
 
         self.perclos_samples.append((t, dt, self.closed))
-        while self.perclos_samples and self.perclos_samples[0][0] < t - c.perclos_window_s:
-            self.perclos_samples.popleft()
-        while self.blinks and self.blinks[0] < t - 60.0:
-            self.blinks.popleft()
 
     def _update_mouth(self, t, mar):
         c = self.cfg
