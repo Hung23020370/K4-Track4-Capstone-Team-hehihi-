@@ -105,6 +105,19 @@ def head_pose(pts, w, h):
     return float(yaw), float(pitch)
 
 
+def pick_driver(faces, w, h):
+    """Index of the largest face: the one nearest the camera is the driver.
+
+    With one face requested the landmarker returns whichever it is most sure of,
+    which can be a passenger or someone in the back seat.
+    """
+    def area(lms):
+        xs = [p.x * w for p in lms]
+        ys = [p.y * h for p in lms]
+        return (max(xs) - min(xs)) * (max(ys) - min(ys))
+    return max(range(len(faces)), key=lambda i: area(faces[i]))
+
+
 def observe(landmarks, w, h):
     pts = to_pixels(landmarks, w, h)
     ear_r = eye_aspect_ratio(pts, RIGHT_EYE)

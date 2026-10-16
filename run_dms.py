@@ -22,7 +22,7 @@ import cv2
 import numpy as np
 
 from dms.evaluation import GT_CLOSED, GT_NONE, LOG_FIELDS, Protocol, read_log, replay, score, timing
-from dms.features import LEFT_EYE, RIGHT_EYE, observe
+from dms.features import LEFT_EYE, RIGHT_EYE, observe, pick_driver
 from dms.monitor import (CALIBRATING, DISTRACTED, LEVEL_ALARM, LEVEL_WARN, MICROSLEEP, NO_FACE,
                          PERCLOS_HIGH, UNCERTAIN, YAWNING, Monitor)
 
@@ -65,13 +65,13 @@ def ensure_model(path):
     return path
 
 
-def make_landmarker(model_path):
+def make_landmarker(model_path, max_faces=3):
     import mediapipe as mp
     from mediapipe.tasks.python import BaseOptions, vision
     opts = vision.FaceLandmarkerOptions(
         base_options=BaseOptions(model_asset_path=model_path),
         running_mode=vision.RunningMode.VIDEO,
-        num_faces=1,
+        num_faces=max_faces,
         min_face_detection_confidence=0.5,
         min_face_presence_confidence=0.5,
         min_tracking_confidence=0.5,
@@ -226,21 +226,20 @@ def draw(frame, text, rep, pts, history, proto_info, fps, proc_ms):
     return text.render(frame)
 
 
-def open_source(source, is_cam, width=640, height=480):
+def open_source(source, is_cam):
     if not is_cam:
         cap = cv2.VideoCapture(source)
         if not cap.isOpened():
             sys.exit(f"Cannot open video {source!r}")
         return cap
+    # DirectShow first on Windows: MSMF refuses some webcams. Resolution is left at
+    # the camera's default (cap.set breaks DirectShow's buffer on some webcams);
+    # frames are scaled in software instead, see fit().
     backends = ([cv2.CAP_DSHOW] if sys.platform == "win32" else []) + [cv2.CAP_ANY]
     for be in backends:
         cap = cv2.VideoCapture(int(source), be)
-        if cap.isOpened():
-            # Nếu muốn chỉnh độ phân giải thì PHẢI chỉnh TRƯỚC khi gọi cap.read() lần đầu
-            # Hoặc tốt nhất để mặc định của webcam rồi dùng cv2.resize sau
-            ok, _ = cap.read()
-            if ok:
-                return cap
+        if cap.isOpened() and cap.read()[0]:
+            return cap
         cap.release()
     sys.exit(
         f"Cannot open camera {source}. Check that:\n"
@@ -250,12 +249,28 @@ def open_source(source, is_cam, width=640, height=480):
         "Or run on a recorded clip: python run_dms.py --source clip.mp4")
 
 
+def fit(frame, max_w, max_h):
+    """Scale to fit inside max_w x max_h, keeping the aspect ratio.
+
+    Stretching a 4:3 webcam to 16:9 widens the eyes and lowers EAR by ~25%,
+    and skews the head pose, so the shape of the face must be preserved.
+    """
+    h, w = frame.shape[:2]
+    s = min(max_w / w, max_h / h)
+    if abs(s - 1) < 1e-3:
+        return frame
+    return cv2.resize(frame, (round(w * s), round(h * s)),
+                      interpolation=cv2.INTER_AREA if s < 1 else cv2.INTER_LINEAR)
+
+
 # ---- main loop ----------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--source", default="0", help="camera index or video file")
-    ap.add_argument("--width", type=int, default=960)
-    ap.add_argument("--height", type=int, default=540)
+    ap.add_argument("--width", type=int, default=960, help="max frame width (aspect ratio is kept)")
+    ap.add_argument("--height", type=int, default=540, help="max frame height (aspect ratio is kept)")
+    ap.add_argument("--max-faces", type=int, default=3,
+                    help="faces to detect; the largest (closest to the camera) is the driver")
     ap.add_argument("--model", default=os.path.join("models", "face_landmarker.task"))
     ap.add_argument("--log-dir", default="logs")
     ap.add_argument("--protocol", action="store_true", help="start the scripted test after calibration")
@@ -266,13 +281,9 @@ def main():
     ap.add_argument("--max-seconds", type=float, default=0, help="stop after this long (0 = no limit)")
     args = ap.parse_args()
 
-    mp, landmarker = make_landmarker(ensure_model(args.model))
+    mp, landmarker = make_landmarker(ensure_model(args.model), args.max_faces)
     is_cam = args.source.isdigit()
     cap = open_source(args.source, is_cam)
-    # XÓA HOẶC COMMENT 3 DÒNG cap.set NÀY ĐI VÌ NÓ LÀM HỎNG BUFFER CỦA DIRECTSHOW:
-    # if is_cam:
-    #     cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
-    #     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 
     os.makedirs(args.log_dir, exist_ok=True)
@@ -297,8 +308,7 @@ def main():
             t_cap = time.perf_counter()
             if not ok:
                 break
-            if is_cam:
-                frame = cv2.resize(frame, (args.width, args.height)) # Resize bằng phần mềm an toàn 100%
+            frame = fit(frame, args.width, args.height)
             if is_cam and not args.no_mirror:
                 frame = cv2.flip(frame, 1)
             t = (t_cap - t0) if is_cam else frame_idx / video_fps
@@ -311,7 +321,9 @@ def main():
             last_ts = ts
             result = landmarker.detect_for_video(
                 mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)), ts)
-            obs, pts = (observe(result.face_landmarks[0], w, h) if result.face_landmarks else (None, None))
+            obs, pts = None, None
+            if result.face_landmarks:
+                obs, pts = observe(result.face_landmarks[pick_driver(result.face_landmarks, w, h)], w, h)
 
             if recalib:
                 monitor.reset()

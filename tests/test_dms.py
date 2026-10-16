@@ -68,6 +68,24 @@ class Features(unittest.TestCase):
             self.assertAlmostEqual(got_pitch, pitch, delta=1, msg=(yaw, pitch))
 
 
+class DriverSelection(unittest.TestCase):
+    def test_largest_face_is_the_driver(self):
+        from types import SimpleNamespace as P
+
+        def face(cx, cy, r):
+            return [P(x=cx + dx * r, y=cy + dy * r) for dx, dy in ((-1, -1), (1, 1), (0, 0))]
+        faces = [face(0.7, 0.4, 0.05), face(0.2, 0.5, 0.2), face(0.5, 0.3, 0.08)]
+        from dms.features import pick_driver
+        self.assertEqual(pick_driver(faces, 640, 480), 1)
+
+    def test_frames_are_scaled_without_stretching(self):
+        from run_dms import fit
+        out = fit(np.zeros((480, 640, 3), np.uint8), 960, 540)  # 4:3 webcam into a 16:9 box
+        self.assertEqual(out.shape[:2], (540, 720))
+        out = fit(np.zeros((1080, 1920, 3), np.uint8), 960, 540)
+        self.assertEqual(out.shape[:2], (540, 960))
+
+
 class MonitorLogic(unittest.TestCase):
     def test_calibration_sets_per_driver_threshold(self):
         mon, _ = calibrated_monitor()
