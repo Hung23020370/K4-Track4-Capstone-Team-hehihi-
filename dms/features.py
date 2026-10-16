@@ -4,6 +4,7 @@ Representation pillar: a face becomes eye openness (EAR), mouth openness (MAR)
 and head orientation (yaw, pitch). Geometry pillar: head pose comes from
 solvePnP between a generic 3D face model and the 2D landmarks.
 """
+from collections import deque
 from dataclasses import dataclass
 
 import cv2
@@ -36,6 +37,25 @@ class Observation:
     mar: float
     yaw: float      # degrees, raw (the monitor subtracts the driver's baseline)
     pitch: float
+
+
+class MovingAverage:
+    """Causal moving-average filter for noisy per-frame signals.
+
+    update(x) appends x and returns the mean of the last `window` samples.
+    A short window (3-5 frames ~ 0.15-0.2 s at 24 FPS) kills landmark jitter
+    while preserving real eye closures (1 s+) and yawns.
+    """
+    def __init__(self, window=5):
+        self.window = max(1, int(window))
+        self._buf = deque(maxlen=self.window)
+
+    def update(self, x):
+        self._buf.append(x)
+        return sum(self._buf) / len(self._buf)
+
+    def reset(self):
+        self._buf.clear()
 
 
 def to_pixels(landmarks, w, h):

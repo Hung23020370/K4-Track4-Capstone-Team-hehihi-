@@ -32,8 +32,9 @@ class Config:
     perclos_warn: float = 0.15
     perclos_min_coverage: float = 0.5
     max_gap_s: float = 0.2        # a sample never stands for more than this much time
-    yawn_mar: float = 0.6
-    yawn_s: float = 1.5
+    yawn_mar: float = 0.55       # mouth counts as open above this (high threshold)
+    yawn_mar_close: float = 0.40  # ...and closed again only below this (hysteresis)
+    yawn_s: float = 0.5
     yawn_window_s: float = 120.0
     yawn_warn_count: int = 2
     yaw_limit_deg: float = 30.0   # head turned away from the road
@@ -175,14 +176,19 @@ class Monitor:
 
     def _update_mouth(self, t, mar):
         c = self.cfg
-        if mar > c.yawn_mar:
-            if self.mouth_open_since is None:
+        if self.mouth_open_since is None:
+            # Mouth closed: open only above the high threshold, so talking
+            # (MAR ~0.5) does not start the timer.
+            if mar > c.yawn_mar:
                 self.mouth_open_since, self.yawn_counted = t, False
-            if not self.yawn_counted and t - self.mouth_open_since >= c.yawn_s:
+        else:
+            # Mouth open: stay open until below the low threshold. Without this
+            # hysteresis a single noisy frame under yawn_mar resets the timer.
+            if mar < c.yawn_mar_close:
+                self.mouth_open_since = None
+            elif not self.yawn_counted and t - self.mouth_open_since >= c.yawn_s:
                 self.yawns.append(t)
                 self.yawn_counted = True
-        else:
-            self.mouth_open_since = None
         while self.yawns and self.yawns[0] < t - c.yawn_window_s:
             self.yawns.popleft()
 
