@@ -226,18 +226,21 @@ def draw(frame, text, rep, pts, history, proto_info, fps, proc_ms):
     return text.render(frame)
 
 
-def open_source(source, is_cam):
+def open_source(source, is_cam, width=640, height=480):
     if not is_cam:
         cap = cv2.VideoCapture(source)
         if not cap.isOpened():
             sys.exit(f"Cannot open video {source!r}")
         return cap
-    # Windows' default backend (MSMF) refuses some webcams that DirectShow opens.
-    backends = [cv2.CAP_ANY] + ([cv2.CAP_DSHOW] if sys.platform == "win32" else [])
+    backends = ([cv2.CAP_DSHOW] if sys.platform == "win32" else []) + [cv2.CAP_ANY]
     for be in backends:
         cap = cv2.VideoCapture(int(source), be)
-        if cap.isOpened() and cap.read()[0]:
-            return cap
+        if cap.isOpened():
+            # Nếu muốn chỉnh độ phân giải thì PHẢI chỉnh TRƯỚC khi gọi cap.read() lần đầu
+            # Hoặc tốt nhất để mặc định của webcam rồi dùng cv2.resize sau
+            ok, _ = cap.read()
+            if ok:
+                return cap
         cap.release()
     sys.exit(
         f"Cannot open camera {source}. Check that:\n"
@@ -266,9 +269,10 @@ def main():
     mp, landmarker = make_landmarker(ensure_model(args.model))
     is_cam = args.source.isdigit()
     cap = open_source(args.source, is_cam)
-    if is_cam:
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
+    # XÓA HOẶC COMMENT 3 DÒNG cap.set NÀY ĐI VÌ NÓ LÀM HỎNG BUFFER CỦA DIRECTSHOW:
+    # if is_cam:
+    #     cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
+    #     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 
     os.makedirs(args.log_dir, exist_ok=True)
@@ -293,6 +297,8 @@ def main():
             t_cap = time.perf_counter()
             if not ok:
                 break
+            if is_cam:
+                frame = cv2.resize(frame, (args.width, args.height)) # Resize bằng phần mềm an toàn 100%
             if is_cam and not args.no_mirror:
                 frame = cv2.flip(frame, 1)
             t = (t_cap - t0) if is_cam else frame_idx / video_fps
